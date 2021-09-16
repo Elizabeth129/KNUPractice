@@ -2,6 +2,7 @@ import os
 import pickle
 import random
 import time
+import json
 
 import boto3
 import numpy as np
@@ -24,55 +25,66 @@ class SensationAnalysisBot(telebot.TeleBot):
         with open(f"models/{tokenizer_name}", "rb") as handle:
             self.tokenizer: Tokenizer = pickle.load(handle)
 
-        self.translator_client = boto3.client(service_name="translate", region_name="eu-west-1", use_ssl=True)
-        self.s3_client = boto3.client(service_name="s3", region_name="eu-west-1", use_ssl=True)
-        self.transcribe_client = boto3.client(service_name="transcribe", region_name="eu-west-1", use_ssl=True)
+        try:        
+            self.translator_client = boto3.client(service_name="translate", region_name="eu-west-1", use_ssl=True)
+            self.s3_client = boto3.client(service_name="s3", region_name="eu-west-1", use_ssl=True)
+            self.transcribe_client = boto3.client(service_name="transcribe", region_name="eu-west-1", use_ssl=True)
+        except:
+            pass
         self.sentence_analyzer = stanza.Pipeline('en')
+        with open("questions_conf.json", "r") as f:
+            self.questions_conf = json.load(f)
 
         self.chat_evaluations = dict()
         self.chat_used_words = dict()
 
     def translate_message(self, message_text):
-        return self.translator_client.translate_text(
-            Text=message_text,
-            SourceLanguageCode='auto',
-            TargetLanguageCode='en'
-        )
+        try:
+            return self.translator_client.translate_text(
+                Text=message_text,
+                SourceLanguageCode='auto',
+                TargetLanguageCode='en'
+            )
+        except:
+            return message_text
 
     def speech_to_text(self, voice_message):
-        file_info = self.get_file(voice_message.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        ogg_file_name = f'{voice_message.file_id}.ogg'
-        with open(ogg_file_name, 'wb') as new_file:
-            new_file.write(downloaded_file)
-        # data, sample_rate = sf.read(ogg_file_name)
-        wav_file_name = f'{voice_message.file_id}.wav'
-        AudioSegment.from_ogg(ogg_file_name).export(wav_file_name, format='wav')
-        # sf.write(wav_file_name, data, sample_rate)
-        os.remove(ogg_file_name)
-        self.s3_client.upload_file(wav_file_name, SensationAnalysisBot.BUCKET_NAME, wav_file_name)
-        os.remove(wav_file_name)
-        file_uri = f"https://s3.eu-west-1.amazonaws.com/{SensationAnalysisBot.BUCKET_NAME}/{wav_file_name}"
-        job_name = voice_message.file_id
-        self.transcribe_client.start_transcription_job(
-            TranscriptionJobName=job_name,
-            Media={'MediaFileUri': file_uri},
-            # MediaFileFormat='wav',
-            IdentifyLanguage=True
-        )
-        time.sleep(1)
-        job = None
-        while True:
-            job = self.transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
-            if job['TranscriptionJob']['TranscriptionJobStatus'] in ['COMPLETED', 'FAILED']:
-                break
-            print("Transcription not ready yet...")
-            time.sleep(5)
-        if job['TranscriptionJob']['TranscriptionJobStatus'] == 'FAILED':
-            return None
         try:
-            result_json = requests.get(job['TranscriptionJob']['Transcript']['TranscriptFileUri']).json()
-            return result_json['results']['transcripts'][0]['transcript']
+            file_info = self.get_file(voice_message.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            ogg_file_name = f'{voice_message.file_id}.ogg'
+            with open(ogg_file_name, 'wb') as new_file:
+                new_file.write(downloaded_file)
+            # data, sample_rate = sf.read(ogg_file_name)
+            wav_file_name = f'{voice_message.file_id}.wav'
+            AudioSegment.from_ogg(ogg_file_name).export(wav_file_name, format='wav')
+            # sf.write(wav_file_name, data, sample_rate)
+            os.remove(ogg_file_name)
+            self.s3_client.upload_file(wav_file_name, SensationAnalysisBot.BUCKET_NAME, wav_file_name)
+            os.remove(wav_file_name)
+            file_uri = f"https://s3.eu-west-1.amazonaws.com/{SensationAnalysisBot.BUCKET_NAME}/{wav_file_name}"
+            job_name = voice_message.file_id
+            self.transcribe_client.start_transcription_job(
+                TranscriptionJobName=job_name,
+                Media={'MediaFileUri': file_uri},
+                # MediaFileFormat='wav',
+                IdentifyLanguage=True
+            )
+            time.sleep(1)
+            job = None
+            while True:
+                job = self.transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
+                if job['TranscriptionJob']['TranscriptionJobStatus'] in ['COMPLETED', 'FAILED']:
+                    break
+                print("Transcription not ready yet...")
+                time.sleep(5)
+            if job['TranscriptionJob']['TranscriptionJobStatus'] == 'FAILED':
+                return None
+            try:
+                result_json = requests.get(job['TranscriptionJob']['Transcript']['TranscriptFileUri']).json()
+                return result_json['results']['transcripts'][0]['transcript']
+            except:
+                return None
         except:
             return None
         
@@ -120,11 +132,7 @@ class SensationAnalysisBot(telebot.TeleBot):
                     candidates.append({"word": word, "ner": token.ner})
                     
         if len(candidates) == 0:
-            possibilities = [
-                "Can you tell me something else?",
-                "Maybe we should talk about something else",
-                "It is very interesting, but we should discuss different topics",
-            ]
+            possibilities = self.questions_conf["returnings"]
             return random.choice(possibilities)
         candidate_d = random.choice(candidates)
         candidate = candidate_d["word"]
@@ -134,34 +142,18 @@ class SensationAnalysisBot(telebot.TeleBot):
             self.chat_used_words[chat_id].append(candidate.lemma.lower())
         
         if candidate.upos == "VERB":
-            possibilities = [
-                f"Do you like to '{candidate.lemma}'?",
-                f"How do you like to '{candidate.lemma}'?",
-                f"What does 'to {candidate.lemma}' mean to you?",
-            ]
+            possibilities = list(map(lambda x: x.format(candidate.lemma), self.questions_conf["verb"]))
         elif "PERSON" in candidate_d["ner"]:
-            possibilities = [
-                f"Who is '{candidate.lemma}'?",
-                f"How do you feel about '{candidate.lemma}'?",
-                f"What is '{candidate.lemma}' associated with for you?",
-                f"How did you met with '{candidate.lemma}'?",
-                f"How is it to be around '{candidate.lemma}'?",
-            ]
+            possibilities = list(map(lambda x: x.format(candidate.lemma), self.questions_conf["person"]))
         else:
-            possibilities = [
-                f"How do you feel about '{candidate.lemma}'?",
-                f"What is '{candidate.lemma}' for you?",
-                f"What would you like to do with '{candidate.lemma}'?",
-                f"What are your feelings about '{candidate.lemma}'?",
-                f"Do you like to have '{candidate.lemma}'?",
-            ]
-        possibilities.append("How do you feel about that?")
+            possibilities = list(map(lambda x: x.format(candidate.lemma), self.questions_conf["other"]))
+        possibilities.extend(self.questions_conf["default"])
         return random.choice(possibilities)
 
 
 bot = SensationAnalysisBot("1999609936:AAHYkGU_-GbH3PQDifN1-FKxjWXrmIa8RfA",
-                           "model_1_6B_set_LSTM_1_hidden_layer_v2",
-                           "tokenizer_1_6B_set_v2.pickle")
+                           "model_1_6B_set_LSTM_1_hidden_layer",
+                           "tokenizer_1_6B_set.pickle")
 
 @bot.message_handler(commands=["start"])
 def handle_start_command(message):

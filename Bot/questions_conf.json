@@ -1,0 +1,29 @@
+{
+    "verb": [
+        "Do you like to '{}'?",
+        "How do you like to '{}'?",
+        "What does 'to {}' mean to you?"
+    ],
+    "person": [
+        "Who is '{}'?",
+        "How do you feel about '{}'?",
+        "What is '{}' associated with for you?",
+        "How did you met with '{}'?",
+        "How is it to be around '{}'?"
+    ],
+    "other": [
+        "How do you feel about '{}'?",
+        "What is '{}' for you?",
+        "What would you like to do with '{}'?",
+        "What are your feelings about '{}'?",
+        "Do you like to have '{}'?"
+    ],
+    "returnings": [
+        "Can you tell me something else?",
+        "Maybe we should talk about something else",
+        "It is very interesting, but we should discuss different topics"
+    ],
+    "default": [
+        "How do you feel about that?"
+    ]
+}
